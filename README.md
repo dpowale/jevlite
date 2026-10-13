@@ -18,7 +18,7 @@ jevlite *approximates* a System One model by reading the next-token distribution
 
 1. You give it a `state` (e.g. a customer message, in any language) and one or more typed questions: `noul` (yes/no), `choice` (pick one of N options), or `score` (a 1..N rubric rating).
 2. For each question it builds a prompt and asks a backend for only the **next-token probabilities** - it reads the distribution over the model's vocabulary instead of letting it write a sentence.
-3. It folds those raw token probabilities onto the valid answer symbols (e.g. "Yes"/"yes"/full-width "Ａ" all map to the same answer), renormalises, and (for `choice`) averages over several option orderings to cancel position bias.
+3. Different tokens can spell the same answer (`"Yes"`, `"yes"`, full-width `"Ａ"`), so it **folds** them together: normalise each candidate token's text and sum the probabilities of every token that normalises to the same answer, then **renormalise** so the folded probabilities add up to 1 again. For `choice`, it also repeats this with the options shuffled into a few different orders and **averages** the results, which cancels out the model's tendency to favor whichever option happens to sit first or last.
 4. A per-task temperature (fit via `calibration.json`) rescales the result so confidence reflects actual accuracy, since raw LLM probabilities tend to be overconfident.
 5. The answer comes back with `value`, `probabilities`, `confidence`, `margin`, `coverage` (how much probability mass landed on valid answers at all - a sanity check the model didn't try to go off-script), and an `action` of `act` / `confirm` / `escalate` based on configurable thresholds.
 
@@ -242,6 +242,17 @@ All 21 unit tests pass, including a finite-difference check of the head's gradie
 1. Collect `decisions.jsonl` plus human corrections and add them as hard labels.
 2. Retrain the pointer head as data grows and re-fit calibration; compare per-language accuracy against the LLM teacher.
 3. Keep the LLM backend as the fallback for the `escalate` band.
+
+## References
+
+Techniques this design draws on:
+
+- Kahneman, D. (2011). *Thinking, Fast and Slow*. Farrar, Straus and Giroux. - the System 1 / System 2 framing jevlite approximates.
+- Guo, C., Pleiss, G., Sun, Y., & Weinberger, K. Q. (2017). *On Calibration of Modern Neural Networks*. ICML. - temperature scaling as used in [calibration.py](jevlite/calibration.py).
+- Naeini, M. P., Cooper, G., & Hauskrecht, M. (2015). *Obtaining Well Calibrated Probabilities Using Bayesian Binning*. AAAI. - expected calibration error (ECE).
+- Brier, G. W. (1950). *Verification of Forecasts Expressed in Terms of Probability*. Monthly Weather Review. - the Brier score metric.
+- Zheng, C., Zhou, H., Meng, F., Zhou, J., & Huang, M. (2023). *Large Language Models Are Not Robust Multiple Choice Selectors*. - motivates averaging over option orderings to cancel position bias.
+- Vinyals, O., Fortunato, M., & Jaitly, N. (2015). *Pointer Networks*. NeurIPS. - inspiration for the non-generative pointer head that scores option text directly instead of sampling tokens.
 
 ## License
 
