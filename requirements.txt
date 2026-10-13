@@ -1,0 +1,9 @@
+fastapi
+httpx
+pydantic>=2
+uvicorn
+numpy
+pytest
+# optional, only for HFEncoder / HFBackend:
+# torch
+# transformers
