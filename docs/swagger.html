@@ -1,0 +1,1373 @@
+
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+    <link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
+    <title>jevlite API - Swagger UI</title>
+    </head>
+    <body>
+    <div id="swagger-ui">
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <!-- `SwaggerUIBundle` is now available on the page -->
+    <script>
+    const ui = SwaggerUIBundle({
+        url: 'https://jevlite.local/openapi.json',
+        spec: {
+  "openapi": "3.1.0",
+  "info": {
+    "title": "jevlite API",
+    "summary": "Calibrated System-1 decision layer for multilingual text triage.",
+    "description": "Evaluates untrusted multilingual text (`state`) against typed non-generative questions (`noul`, `choice`, `score`) and returns MAP-calibrated probabilities, Split Conformal Adaptive Prediction Sets (`prediction_set`), and routing actions (`act` | `confirm` | `escalate`).",
+    "version": "0.2.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Liveness and active model check",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "title": "Ok",
+                      "description": "True when the decision engine is initialised and ready.",
+                      "default": true
+                    },
+                    "model": {
+                      "type": "string",
+                      "title": "Model",
+                      "description": "Active backend model name (pointer, HF path, or Ollama tag)."
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "model"
+                  ],
+                  "title": "HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/decide": {
+      "post": {
+        "tags": [
+          "triage"
+        ],
+        "summary": "Evaluate typed multilingual triage questions",
+        "operationId": "decide_v1_decide_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "state": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      }
+                    ],
+                    "title": "State",
+                    "description": "Untrusted input text or structured JSON object in any language."
+                  },
+                  "questions": {
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "properties": {
+                            "prompt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "title": "Prompt"
+                            },
+                            "task": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Task"
+                            },
+                            "type": {
+                              "type": "string",
+                              "const": "noul",
+                              "title": "Type"
+                            }
+                          },
+                          "type": "object",
+                          "required": [
+                            "prompt",
+                            "type"
+                          ],
+                          "title": "Noul"
+                        },
+                        {
+                          "properties": {
+                            "prompt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "title": "Prompt"
+                            },
+                            "task": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Task"
+                            },
+                            "type": {
+                              "type": "string",
+                              "const": "choice",
+                              "title": "Type"
+                            },
+                            "options": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array",
+                              "maxItems": 26,
+                              "minItems": 2,
+                              "title": "Options"
+                            }
+                          },
+                          "type": "object",
+                          "required": [
+                            "prompt",
+                            "type",
+                            "options"
+                          ],
+                          "title": "Choice"
+                        },
+                        {
+                          "properties": {
+                            "prompt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "title": "Prompt"
+                            },
+                            "task": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Task"
+                            },
+                            "type": {
+                              "type": "string",
+                              "const": "score",
+                              "title": "Type"
+                            },
+                            "levels": {
+                              "type": "integer",
+                              "maximum": 9.0,
+                              "minimum": 2.0,
+                              "title": "Levels",
+                              "default": 5
+                            },
+                            "rubric": {
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Rubric"
+                            }
+                          },
+                          "type": "object",
+                          "required": [
+                            "prompt",
+                            "type"
+                          ],
+                          "title": "Score"
+                        }
+                      ],
+                      "discriminator": {
+                        "propertyName": "type"
+                      }
+                    },
+                    "type": "object",
+                    "maxProperties": 64,
+                    "minProperties": 1,
+                    "title": "Questions",
+                    "description": "Map of question IDs to typed question definitions (`noul`, `choice`, `score`)."
+                  },
+                  "lang": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Lang",
+                    "description": "Optional ISO 639-1 language tag (e.g. 'es', 'ja', 'ar') for Mondrian conformal quantiles."
+                  },
+                  "permutations": {
+                    "type": "integer",
+                    "maximum": 26.0,
+                    "minimum": 1.0,
+                    "title": "Permutations",
+                    "description": "Number of option-order rotations for `choice` (1 uses single-pass PriDe prior if calibrated).",
+                    "default": 1
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "state",
+                  "questions"
+                ],
+                "title": "DecideRequest",
+                "examples": [
+                  {
+                    "lang": "ja",
+                    "permutations": 1,
+                    "questions": {
+                      "sentiment": {
+                        "prompt": "Is the customer unhappy?",
+                        "task": "sentiment",
+                        "type": "noul"
+                      },
+                      "topic": {
+                        "options": [
+                          "billing",
+                          "shipping",
+                          "technical_support",
+                          "other"
+                        ],
+                        "prompt": "What is this about?",
+                        "task": "intent",
+                        "type": "choice"
+                      },
+                      "urgency": {
+                        "levels": 3,
+                        "prompt": "How urgent is this?",
+                        "rubric": [
+                          "not urgent",
+                          "somewhat urgent",
+                          "urgent"
+                        ],
+                        "task": "urgency",
+                        "type": "score"
+                      }
+                    },
+                    "state": "ログインしようとするとエラーが出て、社内の誰も作業できません。至急確認してください。"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "type": "string",
+                      "title": "Model",
+                      "description": "Identifier of the backend model that produced the decision."
+                    },
+                    "answers": {
+                      "additionalProperties": {
+                        "properties": {
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "integer"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ],
+                            "title": "Value",
+                            "description": "Top-1 predicted answer (`bool` for noul, `str` for choice, `int` for score)."
+                          },
+                          "probabilities": {
+                            "additionalProperties": {
+                              "type": "number"
+                            },
+                            "type": "object",
+                            "title": "Probabilities",
+                            "description": "Calibrated probability distribution over valid options."
+                          },
+                          "confidence": {
+                            "type": "number",
+                            "title": "Confidence",
+                            "description": "Maximum calibrated probability (concentration, not raw correctness)."
+                          },
+                          "margin": {
+                            "type": "number",
+                            "title": "Margin",
+                            "description": "Probability gap between top-1 and top-2 candidates."
+                          },
+                          "coverage": {
+                            "type": "number",
+                            "title": "Coverage",
+                            "description": "Raw probability mass placed on valid answer tokens before renormalisation."
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "act",
+                              "confirm",
+                              "escalate"
+                            ],
+                            "title": "Action",
+                            "description": "Automated triage routing decision."
+                          },
+                          "prediction_set": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "integer"
+                                    },
+                                    {
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "title": "Prediction Set",
+                            "description": "Split Conformal Adaptive Prediction Set (APS) at target coverage (1 - alpha)."
+                          },
+                          "entropy": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "title": "Entropy",
+                            "description": "Normalized Shannon entropy in [0, 1] for active-learning prioritisation."
+                          },
+                          "expected": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "title": "Expected",
+                            "description": "`score` only: expected rubric level E[Y]."
+                          },
+                          "spread": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "title": "Spread",
+                            "description": "`score` only: ordinal standard deviation sqrt(Var[Y])."
+                          }
+                        },
+                        "type": "object",
+                        "required": [
+                          "value",
+                          "probabilities",
+                          "confidence",
+                          "margin",
+                          "coverage",
+                          "action"
+                        ],
+                        "title": "Answer"
+                      },
+                      "type": "object",
+                      "title": "Answers",
+                      "description": "Calibrated triage answers keyed by question ID."
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "model",
+                    "answers"
+                  ],
+                  "title": "DecideResponse",
+                  "examples": [
+                    {
+                      "answers": {
+                        "sentiment": {
+                          "action": "act",
+                          "confidence": 0.999937,
+                          "coverage": 0.999997,
+                          "entropy": 0.000976,
+                          "margin": 0.999873,
+                          "prediction_set": [
+                            true
+                          ],
+                          "probabilities": {
+                            "false": 6.3e-05,
+                            "true": 0.999937
+                          },
+                          "value": true
+                        },
+                        "topic": {
+                          "action": "act",
+                          "confidence": 1.0,
+                          "coverage": 1.0,
+                          "entropy": 1.2e-05,
+                          "margin": 0.999999,
+                          "prediction_set": [
+                            "technical_support"
+                          ],
+                          "probabilities": {
+                            "billing": 0.0,
+                            "other": 0.0,
+                            "shipping": 0.0,
+                            "technical_support": 1.0
+                          },
+                          "value": "technical_support"
+                        },
+                        "urgency": {
+                          "action": "act",
+                          "confidence": 0.975079,
+                          "coverage": 0.999995,
+                          "entropy": 0.1184,
+                          "expected": 2.9699,
+                          "margin": 0.955358,
+                          "prediction_set": [
+                            3
+                          ],
+                          "probabilities": {
+                            "1": 0.0052,
+                            "2": 0.019721,
+                            "3": 0.975079
+                          },
+                          "spread": 0.2008,
+                          "value": 3
+                        }
+                      },
+                      "model": "gemma3:12b"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Upstream model backend error (e.g. Ollama unreachable or missing logprobs)."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "items": {
+                        "properties": {
+                          "loc": {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "integer"
+                                }
+                              ]
+                            },
+                            "type": "array",
+                            "title": "Location"
+                          },
+                          "msg": {
+                            "type": "string",
+                            "title": "Message"
+                          },
+                          "type": {
+                            "type": "string",
+                            "title": "Error Type"
+                          },
+                          "input": {
+                            "title": "Input"
+                          },
+                          "ctx": {
+                            "type": "object",
+                            "title": "Context"
+                          }
+                        },
+                        "type": "object",
+                        "required": [
+                          "loc",
+                          "msg",
+                          "type"
+                        ],
+                        "title": "ValidationError"
+                      },
+                      "type": "array",
+                      "title": "Detail"
+                    }
+                  },
+                  "type": "object",
+                  "title": "HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Answer": {
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Value",
+            "description": "Top-1 predicted answer (`bool` for noul, `str` for choice, `int` for score)."
+          },
+          "probabilities": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Probabilities",
+            "description": "Calibrated probability distribution over valid options."
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "description": "Maximum calibrated probability (concentration, not raw correctness)."
+          },
+          "margin": {
+            "type": "number",
+            "title": "Margin",
+            "description": "Probability gap between top-1 and top-2 candidates."
+          },
+          "coverage": {
+            "type": "number",
+            "title": "Coverage",
+            "description": "Raw probability mass placed on valid answer tokens before renormalisation."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "act",
+              "confirm",
+              "escalate"
+            ],
+            "title": "Action",
+            "description": "Automated triage routing decision."
+          },
+          "prediction_set": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prediction Set",
+            "description": "Split Conformal Adaptive Prediction Set (APS) at target coverage (1 - alpha)."
+          },
+          "entropy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entropy",
+            "description": "Normalized Shannon entropy in [0, 1] for active-learning prioritisation."
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected",
+            "description": "`score` only: expected rubric level E[Y]."
+          },
+          "spread": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread",
+            "description": "`score` only: ordinal standard deviation sqrt(Var[Y])."
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "probabilities",
+          "confidence",
+          "margin",
+          "coverage",
+          "action"
+        ],
+        "title": "Answer"
+      },
+      "Choice": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          },
+          "type": {
+            "type": "string",
+            "const": "choice",
+            "title": "Type"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 26,
+            "minItems": 2,
+            "title": "Options"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt",
+          "type",
+          "options"
+        ],
+        "title": "Choice"
+      },
+      "DecideRequest": {
+        "properties": {
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ],
+            "title": "State",
+            "description": "Untrusted input text or structured JSON object in any language."
+          },
+          "questions": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "title": "Prompt"
+                    },
+                    "task": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Task"
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "noul",
+                      "title": "Type"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "prompt",
+                    "type"
+                  ],
+                  "title": "Noul"
+                },
+                {
+                  "properties": {
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "title": "Prompt"
+                    },
+                    "task": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Task"
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "choice",
+                      "title": "Type"
+                    },
+                    "options": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array",
+                      "maxItems": 26,
+                      "minItems": 2,
+                      "title": "Options"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "prompt",
+                    "type",
+                    "options"
+                  ],
+                  "title": "Choice"
+                },
+                {
+                  "properties": {
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "title": "Prompt"
+                    },
+                    "task": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Task"
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "score",
+                      "title": "Type"
+                    },
+                    "levels": {
+                      "type": "integer",
+                      "maximum": 9.0,
+                      "minimum": 2.0,
+                      "title": "Levels",
+                      "default": 5
+                    },
+                    "rubric": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Rubric"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "prompt",
+                    "type"
+                  ],
+                  "title": "Score"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type"
+              }
+            },
+            "type": "object",
+            "maxProperties": 64,
+            "minProperties": 1,
+            "title": "Questions",
+            "description": "Map of question IDs to typed question definitions (`noul`, `choice`, `score`)."
+          },
+          "lang": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lang",
+            "description": "Optional ISO 639-1 language tag (e.g. 'es', 'ja', 'ar') for Mondrian conformal quantiles."
+          },
+          "permutations": {
+            "type": "integer",
+            "maximum": 26.0,
+            "minimum": 1.0,
+            "title": "Permutations",
+            "description": "Number of option-order rotations for `choice` (1 uses single-pass PriDe prior if calibrated).",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "questions"
+        ],
+        "title": "DecideRequest",
+        "examples": [
+          {
+            "lang": "ja",
+            "permutations": 1,
+            "questions": {
+              "sentiment": {
+                "prompt": "Is the customer unhappy?",
+                "task": "sentiment",
+                "type": "noul"
+              },
+              "topic": {
+                "options": [
+                  "billing",
+                  "shipping",
+                  "technical_support",
+                  "other"
+                ],
+                "prompt": "What is this about?",
+                "task": "intent",
+                "type": "choice"
+              },
+              "urgency": {
+                "levels": 3,
+                "prompt": "How urgent is this?",
+                "rubric": [
+                  "not urgent",
+                  "somewhat urgent",
+                  "urgent"
+                ],
+                "task": "urgency",
+                "type": "score"
+              }
+            },
+            "state": "ログインしようとするとエラーが出て、社内の誰も作業できません。至急確認してください。"
+          }
+        ]
+      },
+      "DecideResponse": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "Identifier of the backend model that produced the decision."
+          },
+          "answers": {
+            "additionalProperties": {
+              "properties": {
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "title": "Value",
+                  "description": "Top-1 predicted answer (`bool` for noul, `str` for choice, `int` for score)."
+                },
+                "probabilities": {
+                  "additionalProperties": {
+                    "type": "number"
+                  },
+                  "type": "object",
+                  "title": "Probabilities",
+                  "description": "Calibrated probability distribution over valid options."
+                },
+                "confidence": {
+                  "type": "number",
+                  "title": "Confidence",
+                  "description": "Maximum calibrated probability (concentration, not raw correctness)."
+                },
+                "margin": {
+                  "type": "number",
+                  "title": "Margin",
+                  "description": "Probability gap between top-1 and top-2 candidates."
+                },
+                "coverage": {
+                  "type": "number",
+                  "title": "Coverage",
+                  "description": "Raw probability mass placed on valid answer tokens before renormalisation."
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "act",
+                    "confirm",
+                    "escalate"
+                  ],
+                  "title": "Action",
+                  "description": "Automated triage routing decision."
+                },
+                "prediction_set": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Prediction Set",
+                  "description": "Split Conformal Adaptive Prediction Set (APS) at target coverage (1 - alpha)."
+                },
+                "entropy": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Entropy",
+                  "description": "Normalized Shannon entropy in [0, 1] for active-learning prioritisation."
+                },
+                "expected": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Expected",
+                  "description": "`score` only: expected rubric level E[Y]."
+                },
+                "spread": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Spread",
+                  "description": "`score` only: ordinal standard deviation sqrt(Var[Y])."
+                }
+              },
+              "type": "object",
+              "required": [
+                "value",
+                "probabilities",
+                "confidence",
+                "margin",
+                "coverage",
+                "action"
+              ],
+              "title": "Answer"
+            },
+            "type": "object",
+            "title": "Answers",
+            "description": "Calibrated triage answers keyed by question ID."
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "answers"
+        ],
+        "title": "DecideResponse",
+        "examples": [
+          {
+            "answers": {
+              "sentiment": {
+                "action": "act",
+                "confidence": 0.999937,
+                "coverage": 0.999997,
+                "entropy": 0.000976,
+                "margin": 0.999873,
+                "prediction_set": [
+                  true
+                ],
+                "probabilities": {
+                  "false": 6.3e-05,
+                  "true": 0.999937
+                },
+                "value": true
+              },
+              "topic": {
+                "action": "act",
+                "confidence": 1.0,
+                "coverage": 1.0,
+                "entropy": 1.2e-05,
+                "margin": 0.999999,
+                "prediction_set": [
+                  "technical_support"
+                ],
+                "probabilities": {
+                  "billing": 0.0,
+                  "other": 0.0,
+                  "shipping": 0.0,
+                  "technical_support": 1.0
+                },
+                "value": "technical_support"
+              },
+              "urgency": {
+                "action": "act",
+                "confidence": 0.975079,
+                "coverage": 0.999995,
+                "entropy": 0.1184,
+                "expected": 2.9699,
+                "margin": 0.955358,
+                "prediction_set": [
+                  3
+                ],
+                "probabilities": {
+                  "1": 0.0052,
+                  "2": 0.019721,
+                  "3": 0.975079
+                },
+                "spread": 0.2008,
+                "value": 3
+              }
+            },
+            "model": "gemma3:12b"
+          }
+        ]
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "properties": {
+                "loc": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "type": "array",
+                  "title": "Location"
+                },
+                "msg": {
+                  "type": "string",
+                  "title": "Message"
+                },
+                "type": {
+                  "type": "string",
+                  "title": "Error Type"
+                },
+                "input": {
+                  "title": "Input"
+                },
+                "ctx": {
+                  "type": "object",
+                  "title": "Context"
+                }
+              },
+              "type": "object",
+              "required": [
+                "loc",
+                "msg",
+                "type"
+              ],
+              "title": "ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "description": "True when the decision engine is initialised and ready.",
+            "default": true
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "Active backend model name (pointer, HF path, or Ollama tag)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "title": "HealthResponse"
+      },
+      "Noul": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          },
+          "type": {
+            "type": "string",
+            "const": "noul",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt",
+          "type"
+        ],
+        "title": "Noul"
+      },
+      "Score": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          },
+          "type": {
+            "type": "string",
+            "const": "score",
+            "title": "Type"
+          },
+          "levels": {
+            "type": "integer",
+            "maximum": 9.0,
+            "minimum": 2.0,
+            "title": "Levels",
+            "default": 5
+          },
+          "rubric": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rubric"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt",
+          "type"
+        ],
+        "title": "Score"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "triage",
+      "description": "Structured multilingual decision & routing endpoint."
+    },
+    {
+      "name": "system",
+      "description": "Service health and active model inspection."
+    }
+  ]
+},
+    "dom_id": "#swagger-ui",
+"layout": "BaseLayout",
+"deepLinking": true,
+"showExtensions": true,
+"showCommonExtensions": true,
+"docExpansion": "full",
+"defaultModelsExpandDepth": 1,
+
+    presets: [
+        SwaggerUIBundle.presets.apis,
+        SwaggerUIBundle.SwaggerUIStandalonePreset
+        ],
+    })
+    </script>
+    </body>
+    </html>
+    
