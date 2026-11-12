@@ -9,9 +9,11 @@ from __future__ import annotations
 import asyncio
 import os
 
+from .calibration import logaddexp
+
 
 class HFBackend:
-    def __init__(self, path: str, device: str | None = None, top_k: int = 50, dtype: str = "auto"):
+    def __init__(self, path: str, device: str | None = None, top_k: int = 64, dtype: str = "auto"):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -37,11 +39,13 @@ class HFBackend:
         with torch.inference_mode():
             logits = self.model(**enc).logits[0, -1].float()
             lp = torch.log_softmax(logits, dim=-1)
-            top = lp.topk(self.top_k)
+            top = lp.topk(min(self.top_k, lp.shape[-1]))
+        # Distinct vocabulary IDs can decode to the identical string (e.g. SentencePiece
+        # vs byte-fallback tokens); accumulate mass in log-space with logaddexp.
         out: dict[str, float] = {}
         for v, i in zip(top.values.tolist(), top.indices.tolist()):
             tok = self.tok.decode([i])
-            out[tok] = max(out.get(tok, float("-inf")), v)
+            out[tok] = logaddexp(out[tok], v) if tok in out else v
         return out
 
     async def first_token_logprobs(self, system: str, user: str) -> dict[str, float]:

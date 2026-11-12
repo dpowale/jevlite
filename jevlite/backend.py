@@ -12,6 +12,8 @@ from typing import Callable, Protocol
 
 import httpx
 
+from .calibration import logaddexp
+
 
 class BackendError(RuntimeError):
     pass
@@ -39,7 +41,8 @@ class OllamaBackend:
         timeout: float = 120.0,
     ):
         self.name = model
-        self.top_logprobs = top_logprobs
+        # Ollama's /api/chat enforces 0 <= top_logprobs <= 20 (OpenAI-compatible cap).
+        self.top_logprobs = min(max(top_logprobs, 1), 20)
         self.think = think
         self._client = httpx.AsyncClient(base_url=host, timeout=timeout)
 
@@ -63,7 +66,9 @@ class OllamaBackend:
             if r.status_code == 400 and "think" in r.text.lower() and "think" in body:
                 body.pop("think")  # model doesn't support the flag; retry without it
                 r = await self._client.post("/api/chat", json=body)
-            r.raise_for_status()
+            if r.status_code >= 400:
+                detail = r.text.strip()
+                raise BackendError(f"Ollama HTTP {r.status_code} (model={self.name!r}): {detail}")
         except httpx.HTTPError as e:
             raise BackendError(f"Ollama request failed: {e}") from e
 
@@ -74,9 +79,19 @@ class OllamaBackend:
                 "server behind a custom Backend."
             )
         first = entries[0]
-        out: dict[str, float] = {first["token"]: first["logprob"]}
-        for t in first.get("top_logprobs", []):
-            out[t["token"]] = max(out.get(t["token"], float("-inf")), t["logprob"])
+        top_list = first.get("top_logprobs") or []
+        out: dict[str, float] = {}
+        if top_list:
+            # Ollama includes the sampled `first["token"]` inside `top_logprobs`;
+            # summing across `top_logprobs` avoids double-counting `first` while
+            # properly merging distinct token IDs that decode to the same string.
+            for t in top_list:
+                tok, lp = t["token"], t["logprob"]
+                out[tok] = logaddexp(out[tok], lp) if tok in out else lp
+            if first["token"] not in out:
+                out[first["token"]] = first["logprob"]
+        else:
+            out[first["token"]] = first["logprob"]
         return out
 
     async def aclose(self) -> None:

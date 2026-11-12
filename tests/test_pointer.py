@@ -149,3 +149,40 @@ def test_distill_then_train_on_soft_labels_matches_teacher(tmp_path):
         req = DecideRequest(state=r["state"], questions={"q": r["question"]})
         agree += run(Engine(scorer).decide(req)).answers["q"].value == r["label"]
     assert agree >= 90
+
+
+def test_soft_targets_not_double_smoothed_and_ordinal_smoothing_is_unimodal():
+    head = PointerHead(dim=8, hidden=8, key_dim=4)
+    mask = np.ones((2, 4), dtype=bool)
+    targets = np.array([[0.75, 0.25, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
+    b = Batch(
+        ctx=np.zeros((2, 24)),
+        opts=np.zeros((2, 4, 8)),
+        mask=mask,
+        target=targets,
+        is_soft=np.array([True, False]),
+        is_ordinal=np.array([False, True]),
+    )
+    smoothed = head._prepare_targets(b, label_smoothing=0.10)
+    # Row 0 (soft teacher distribution) is preserved verbatim.
+    assert np.allclose(smoothed[0], targets[0])
+    # Row 1 (ordinal hard label at index 0) gives strictly monotonically decreasing smoothing mass.
+    assert smoothed[1, 1] > smoothed[1, 2] > smoothed[1, 3]
+
+
+def test_verbalised_noul_options_disambiguate_opposite_questions():
+    # Same state, two opposite binary questions ("positive?" vs "negative?")
+    rng = random.Random(42)
+    recs = []
+    for i in range(240):
+        is_pos = rng.random() < 0.5
+        state = " ".join(rng.sample(FILL, 2) + [rng.choice(POS if is_pos else NEG)])
+        ask_pos = i % 2 == 0
+        prompt = "Is the opinion positive?" if ask_pos else "Is the opinion negative?"
+        label = is_pos if ask_pos else (not is_pos)
+        recs.append({"id": str(i), "state": state, "question": {"type": "noul", "prompt": prompt}, "label": label})
+
+    enc = HashEncoder(256)
+    head = PointerHead(enc.dim, hidden=64, key_dim=32, seed=7)
+    stats = head.fit(build_batch(recs[:190], enc), build_batch(recs[190:], enc), epochs=150, lr=5e-3)
+    assert stats["val_acc"] >= 0.85

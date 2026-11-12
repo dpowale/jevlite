@@ -42,12 +42,23 @@ class Batch:
     opts: np.ndarray  # (N, K, d), zero-padded
     mask: np.ndarray  # (N, K) bool, True = real option
     target: np.ndarray  # (N, K) rows sum to 1 over valid options
+    is_soft: np.ndarray | None = None  # (N,) bool: True = distilled teacher distribution
+    is_ordinal: np.ndarray | None = None  # (N,) bool: True = ordered `score` rubric
+    weights: np.ndarray | None = None  # (N,) float: sample weights (e.g. teacher coverage)
 
     def __len__(self) -> int:
         return len(self.ctx)
 
     def take(self, idx) -> "Batch":
-        return Batch(self.ctx[idx], self.opts[idx], self.mask[idx], self.target[idx])
+        return Batch(
+            self.ctx[idx],
+            self.opts[idx],
+            self.mask[idx],
+            self.target[idx],
+            None if self.is_soft is None else self.is_soft[idx],
+            None if self.is_ordinal is None else self.is_ordinal[idx],
+            None if self.weights is None else self.weights[idx],
+        )
 
 
 class PointerHead:
@@ -86,9 +97,14 @@ class PointerHead:
 
     def loss_and_grads(self, b: Batch):
         probs, (a, q, kk, raw, s) = self._forward(b.ctx, b.opts, b.mask)
-        n = len(b)
-        loss = float(-(b.target * np.log(probs + 1e-12)).sum(1).mean())
-        u = (probs - b.target) / n  # dL/dlogits (zero on masked entries)
+        row_nll = -(b.target * np.log(probs + 1e-12)).sum(1)
+        if b.weights is None:
+            loss = float(row_nll.mean())
+            u = (probs - b.target) / len(b)  # dL/dlogits (zero on masked entries)
+        else:
+            w = b.weights / max(float(b.weights.sum()), 1e-12)
+            loss = float((row_nll * w).sum())
+            u = (probs - b.target) * w[:, None]
         draw = u * s
         sq = math.sqrt(self.key_dim)
         dq = np.einsum("bj,bjk->bk", draw, kk) / sq
@@ -113,6 +129,45 @@ class PointerHead:
         return nll, acc
 
     # ---- training -----------------------------------------------------------
+    def _prepare_targets(self, train: Batch, label_smoothing: float) -> np.ndarray:
+        """Apply task-aware smoothing:
+          * Soft teacher targets (`is_soft` or non-one-hot) are left untouched so
+            calibrated teacher uncertainty is never double-smoothed.
+          * Hard ordinal `score` targets receive unimodal Laplace smoothing exp(-|j - y*|)
+            so adjacent rubric levels get higher smoothing mass than opposite extremes.
+          * Hard nominal targets receive standard uniform label smoothing.
+        """
+        if label_smoothing <= 0.0:
+            return train.target.copy()
+        n, kmax = train.target.shape
+        out = train.target.copy()
+        soft_flags = (
+            train.is_soft
+            if train.is_soft is not None
+            else (train.target.max(1) < 1.0 - 1e-6)
+        )
+        ord_flags = (
+            train.is_ordinal
+            if train.is_ordinal is not None
+            else np.zeros(n, dtype=bool)
+        )
+        idx_grid = np.arange(kmax)
+        for i in range(n):
+            if soft_flags[i]:
+                continue
+            valid = train.mask[i]
+            k_val = int(valid.sum())
+            if k_val <= 1:
+                continue
+            if ord_flags[i]:
+                y_star = int(train.target[i].argmax())
+                prior = np.exp(-np.abs(idx_grid - y_star)) * valid
+                prior /= prior.sum()
+            else:
+                prior = valid.astype(float) / k_val
+            out[i] = (1.0 - label_smoothing) * train.target[i] + label_smoothing * prior
+        return out
+
     def fit(
         self,
         train: Batch,
@@ -127,12 +182,14 @@ class PointerHead:
         log=None,
     ) -> dict:
         rng = np.random.default_rng(seed)
-        k_valid = train.mask.sum(1, keepdims=True)
         smoothed = Batch(
             train.ctx,
             train.opts,
             train.mask,
-            (1 - label_smoothing) * train.target + label_smoothing * train.mask / k_valid,
+            self._prepare_targets(train, label_smoothing),
+            train.is_soft,
+            train.is_ordinal,
+            train.weights,
         )
         m = {k: np.zeros_like(v) for k, v in self.p.items()}
         v2 = {k: np.zeros_like(v) for k, v in self.p.items()}
@@ -191,22 +248,35 @@ def build_batch(records: list[dict], encoder: Encoder) -> Batch:
     for r in records:
         q = _QUESTION.validate_python(r["question"])
         parsed.append((render_state(r["state"]), q, option_texts(q), r))
-    texts = sorted({t for st, q, ops, _ in parsed for t in [st, q.prompt, *ops]})
-    emb = dict(zip(texts, encoder.encode(texts)))
+    query_texts = sorted({t for st, q, _, _ in parsed for t in (st, q.prompt)})
+    opt_texts = sorted({o for _, _, ops, _ in parsed for o in ops})
+    encode_opts = getattr(encoder, "encode_options", encoder.encode)
+    emb_q = dict(zip(query_texts, encoder.encode(query_texts)))
+    emb_o = dict(zip(opt_texts, encode_opts(opt_texts)))
+
     n, kmax, d = len(parsed), max(len(ops) for _, _, ops, _ in parsed), encoder.dim
     ctx = np.zeros((n, 3 * d))
     opts = np.zeros((n, kmax, d))
     mask = np.zeros((n, kmax), dtype=bool)
     target = np.zeros((n, kmax))
+    is_soft = np.zeros(n, dtype=bool)
+    is_ordinal = np.zeros(n, dtype=bool)
+    has_weights = any("teacher_cov" in r for _, _, _, r in parsed)
+    weights = np.ones(n) if has_weights else None
+
     for i, (st, q, ops, r) in enumerate(parsed):
-        ctx[i] = ctx_vector(emb[st], emb[q.prompt])
+        ctx[i] = ctx_vector(emb_q[st], emb_q[q.prompt])
         for j, o in enumerate(ops):
-            opts[i, j], mask[i, j] = emb[o], True
+            opts[i, j], mask[i, j] = emb_o[o], True
+        is_ordinal[i] = q.type == "score"
         if "soft" in r:
             target[i, : len(ops)] = r["soft"]
+            is_soft[i] = True
         else:
             target[i, _label_index(q, r["label"])] = 1.0
-    return Batch(ctx, opts, mask, target)
+        if weights is not None and "teacher_cov" in r:
+            weights[i] = max(float(r["teacher_cov"]), 1e-3)
+    return Batch(ctx, opts, mask, target, is_soft, is_ordinal, weights)
 
 
 # ---- inference --------------------------------------------------------------
@@ -215,20 +285,22 @@ class PointerScorer:
 
     def __init__(self, encoder: Encoder, head: PointerHead, name: str = "pointer"):
         self.encoder, self.head, self.name = encoder, head, name
-        self._emb: dict[str, np.ndarray] = {}
+        self._emb: dict[tuple[str, str], np.ndarray] = {}
 
-    def _embed(self, texts: list[str]) -> list[np.ndarray]:
-        missing = [t for t in dict.fromkeys(texts) if t not in self._emb]
+    def _embed_role(self, role: str, texts: list[str]) -> list[np.ndarray]:
+        missing = [t for t in dict.fromkeys(texts) if (role, t) not in self._emb]
         if missing:
-            for t, v in zip(missing, self.encoder.encode(missing)):
-                self._emb[t] = v
-            if len(self._emb) > 20000:  # crude bound
+            fn = getattr(self.encoder, "encode_options", self.encoder.encode) if role == "o" else self.encoder.encode
+            for t, v in zip(missing, fn(missing)):
+                self._emb[(role, t)] = v
+            if len(self._emb) > 20000:  # bounded LRU-style eviction
                 for k in list(self._emb)[:5000]:
                     self._emb.pop(k)
-        return [self._emb[t] for t in texts]
+        return [self._emb[(role, t)] for t in texts]
 
     def _score(self, state: str, prompt: str, options: list[str]) -> list[float]:
-        hs, hq, *ho = self._embed([state, prompt, *options])
+        hs, hq = self._embed_role("q", [state, prompt])
+        ho = self._embed_role("o", options)
         ctx = ctx_vector(hs, hq)[None]
         opts = np.stack(ho)[None]
         mask = np.ones((1, len(options)), dtype=bool)
@@ -240,7 +312,12 @@ class PointerScorer:
     @classmethod
     def load(cls, path: str | Path, encoder: Encoder | None = None) -> "PointerScorer":
         head, meta = PointerHead.load(path)
-        enc = encoder or make_encoder(meta.get("encoder", "hash"), meta.get("pooling", "mean"), meta.get("prefix", ""))
+        enc = encoder or make_encoder(
+            meta.get("encoder", "hash"),
+            meta.get("pooling", "mean"),
+            meta.get("prefix", ""),
+            meta.get("option_prefix"),
+        )
         if enc.dim != head.dim:
             raise ValueError(f"encoder dim {enc.dim} != head dim {head.dim}")
         return cls(enc, head, name=f"pointer:{meta.get('encoder', '?')}")

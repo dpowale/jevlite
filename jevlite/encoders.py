@@ -44,9 +44,17 @@ class HashEncoder:
     def encode(self, texts: list[str]) -> np.ndarray:
         return np.stack([self._vec(t) for t in texts]) if texts else np.zeros((0, self.dim))
 
+    def encode_options(self, texts: list[str]) -> np.ndarray:
+        return self.encode(texts)
+
 
 class HFEncoder:
-    """Frozen Hugging Face encoder with mean (or CLS) pooling."""
+    """Frozen Hugging Face encoder with mean (or CLS) pooling and asymmetric prefixes.
+
+    Bi-encoders such as `intfloat/multilingual-e5-*` expect `"query: "` on input queries
+    (`state` / `prompt`) and `"passage: "` on candidate options. When `prefix="query: "`
+    and `option_prefix` is omitted, `"passage: "` is selected automatically.
+    """
 
     def __init__(
         self,
@@ -55,6 +63,7 @@ class HFEncoder:
         max_length: int = 256,
         pooling: str = "mean",
         prefix: str = "",
+        option_prefix: str | None = None,
         batch_size: int = 32,
     ):
         import torch
@@ -66,13 +75,19 @@ class HFEncoder:
         self.tok = AutoTokenizer.from_pretrained(path, local_files_only=local_files_only)
         self.model = AutoModel.from_pretrained(path, local_files_only=local_files_only).to(self.device).eval()
         self.dim = int(self.model.config.hidden_size)
-        self.max_length, self.pooling, self.prefix, self.batch_size = max_length, pooling, prefix, batch_size
+        if option_prefix is None:
+            option_prefix = "passage: " if prefix.strip().lower() == "query:" else prefix
+        self.max_length = max_length
+        self.pooling = pooling
+        self.prefix = prefix
+        self.option_prefix = option_prefix
+        self.batch_size = batch_size
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def _encode_with_prefix(self, texts: list[str], pfx: str) -> np.ndarray:
         torch = self._torch
         out = []
         for i in range(0, len(texts), self.batch_size):
-            batch = [self.prefix + t for t in texts[i : i + self.batch_size]]
+            batch = [pfx + t for t in texts[i : i + self.batch_size]]
             enc = self.tok(
                 batch, padding=True, truncation=True, max_length=self.max_length, return_tensors="pt"
             ).to(self.device)
@@ -87,9 +102,17 @@ class HFEncoder:
             out.append(v.cpu().numpy())
         return np.concatenate(out).astype(np.float64) if out else np.zeros((0, self.dim))
 
+    def encode(self, texts: list[str]) -> np.ndarray:
+        return self._encode_with_prefix(texts, self.prefix)
 
-def make_encoder(spec: str, pooling: str = "mean", prefix: str = "") -> Encoder:
+    def encode_options(self, texts: list[str]) -> np.ndarray:
+        return self._encode_with_prefix(texts, self.option_prefix)
+
+
+def make_encoder(
+    spec: str, pooling: str = "mean", prefix: str = "", option_prefix: str | None = None
+) -> Encoder:
     """spec: 'hash' | 'hash:1024' | a Hugging Face model id / local path."""
     if spec == "hash" or spec.startswith("hash:"):
         return HashEncoder(int(spec.split(":")[1]) if ":" in spec else 512)
-    return HFEncoder(spec, pooling=pooling, prefix=prefix)
+    return HFEncoder(spec, pooling=pooling, prefix=prefix, option_prefix=option_prefix)
