@@ -1,8 +1,8 @@
 # jevlite
 
-A small, local, JEV-style **System One** decision layer for multilingual text triage, running on [Ollama](https://ollama.com) and local Hugging Face causal LMs as distilled non-generative pointer head.
+A small, local, JEV-style **System One** decision layer for multilingual text triage, running on [Ollama](https://ollama.com), local Hugging Face causal LMs, or a distilled non-generative pointer head.
 
-Ask multilingual questions to JevLite and get prediction sets out with confidence score. 
+Ask multilingual questions to `jevlite` and get calibrated prediction sets out with a confidence score.
 
 ---
 
@@ -63,9 +63,9 @@ Beyond customer support, `jevlite` fits any workflow requiring **fast, private, 
 |---|---|---|---|
 | **AI Agent Router & Guardrails** | User prompts, RAG queries | `noul`: PII / jailbreak check<br/>`choice`: tool or index selection<br/>`score`: complexity `1..5` (route easy queries to small models) | Millisecond System-1 gate in front of expensive System-2 LLMs; cannot generate off-policy text. |
 | **Trust, Safety & Marketplaces** | Cross-border product listings, reviews, live chat | `noul`: prohibited item?<br/>`choice`: `scam` / `hate_speech` / `spam` / `safe`<br/>`score`: harm severity `1..5` | Conformal `act` auto-clears safe traffic within error bound $\alpha$; `confirm` gives moderators a 2-option shortlist. |
-| **Healthcare & Pharmacovigilance** | Multilingual patient portal notes, adverse drug event reports | `noul`: adverse reaction reported?<br/>`choice`: clinical specialty routing<br/>`score`: acuity `1..5` | Runs 100% air-gapped (PHI stays on-premise); ordinal `score` spread prevents under-triaging high-acuity cases. |
+| **Healthcare & Pharmacovigilance** | Multilingual patient portal notes, adverse drug event reports | `noul`: adverse reaction reported?<br/>`choice`: clinical specialty routing<br/>`score`: acuity `1..5` | Runs 100% air-gapped (PHI stays on-premises); ordinal `score` spread prevents under-triaging high-acuity cases. |
 | **Financial Compliance & AML** | Local-language global news, wire memos, surveillance | `noul`: fraud / sanctions allegation?<br/>`choice`: `sanctions` / `aml` / `insolvency` / `unrelated`<br/>`score`: materiality `1..5` | Writes deterministic probabilities, `coverage`, and `prediction_set` to `decisions.jsonl` for audit trails. |
-| **Cybersecurity & Threat Intel** | Global employee-reported phishing emails, OSINT feeds | `noul`: credential or wire request?<br/>`choice`: `phish` / `bec_fraud` / `malware` / `benign`<br/>`score`: SOC priority `1..5` | `<state>` delimiter sanitisation blocks prompt injection hidden inside malicious emails. |
+| **Cybersecurity & Threat Intel** | Global employee-reported phishing emails, OSINT feeds | `noul`: credential or wire request?<br/>`choice`: `phish` / `bec_fraud` / `malware` / `benign`<br/>`score`: SOC priority `1..5` | `<state>` delimiter sanitization blocks prompt injection hidden inside malicious emails. |
 | **Global Supply Chain & Customs** | Supplier emails, bills of lading, factory logs (ZH/VI/ES/DE/TR) | `noul`: shipment delay or shortage?<br/>`choice`: `customs` / `raw_material` / `defect` / `weather`<br/>`score`: line-stoppage risk `1..5` | Evaluates domain jargon in its native language without brittle machine-translation pipelines. |
 | **Crisis Response & Civic 311** | Disaster SMS/WhatsApp reports, municipal intake | `choice`: `medical` / `rescue` / `water` / `power_outage`<br/>`score`: life-safety urgency `1..5` | Runs offline on field laptops; Mondrian per-language calibration protects minority-language speakers. |
 | **Customer Support Operations** | Tickets, emails, app store reviews | `noul`: unhappy customer?<br/>`choice`: `billing` / `shipping` / `tech_support`<br/>`score`: urgency `1..3` | Instant triage across 100+ languages; distills into a zero-GPU NumPy pointer model. |
@@ -84,7 +84,7 @@ Beyond customer support, `jevlite` fits any workflow requiring **fast, private, 
 ```mermaid
 flowchart LR
     IN["<b>1. Input</b><br/>Multilingual State +<br/>Typed Questions<br/><i>server.py | cli.py</i>"]:::entry
-    ENG["<b>2. Engine</b><br/>Sanitise &lt;state&gt; +<br/>Prompt / Option Prep<br/><i>engine.py</i>"]:::engine
+    ENG["<b>2. Engine</b><br/>Sanitize &lt;state&gt; +<br/>Prompt / Option Prep<br/><i>engine.py</i>"]:::engine
 
     subgraph Backends["3. Interchangeable Backends"]
         LLM["<b>Token Backends</b><br/>Ollama / HF Logits<br/><i>backend.py | hf_backend.py</i>"]:::backend
@@ -116,17 +116,17 @@ flowchart LR
 ### 2.2 End-to-End Decision Flow
 
 ```
-state + typed questions ──► sanitised <state> prompt ──► first-token logprobs / pointer logits
+state + typed questions ──► sanitized <state> prompt ──► first-token logprobs / pointer logits
         ──► Unicode + script-digit folding (logaddexp) ──► PriDe 1-pass or parallel permutation debiasing
         ──► MAP temperature scaling ──► Split Conformal APS + ordinal spread guard
         ──► value + probs + prediction_set + confidence + entropy + action
 ```
 
 1. **Input**: You submit a `state` (string or JSON object, in any language), an optional `lang` tag, and one or more typed questions (`noul`, `choice`, `score`).
-2. **Sanitise & Cache**: Untrusted `state` text is sanitised against `<state>` delimiter breakout and placed first in the prompt so multi-question requests share the LLM's KV prefix cache.
-3. **Fold & Coverage**: Candidate tokens (`"Yes"`, `" yes"`, `"Yes."`, full-width `"Ａ"`, Arabic-Indic `"٣"`, Devanagari `"२"`) are normalised, merged via `logaddexp`, and summed per valid symbol while recording raw `coverage` as an out-of-distribution guard.
+2. **Sanitize & Cache**: Untrusted `state` text is sanitized against `<state>` delimiter breakout and placed first in the prompt so multi-question requests share the LLM's KV prefix cache.
+3. **Fold & Coverage**: Candidate tokens (`"Yes"`, `" yes"`, `"Yes."`, full-width `"Ａ"`, Arabic-Indic `"٣"`, Devanagari `"२"`) are normalized, merged via `logaddexp`, and summed per valid symbol while recording raw `coverage` as an out-of-distribution guard.
 4. **Debias**: For `choice`, position bias is removed either in **1 pass** via a calibrated **PriDe** option-letter prior (`permutations=1`) or across $k$ concurrent option rotations (`permutations=k`).
-5. **Calibrate & Route**: A per-task **MAP-regularised temperature** rescales probabilities, **Split Conformal Prediction (APS)** builds a `prediction_set` at target error rate $\alpha$, and ordinal `spread` ($\sigma$) guards `score` rubrics.
+5. **Calibrate & Route**: A per-task **MAP-regularized temperature** rescales probabilities, **Split Conformal Prediction (APS)** builds a `prediction_set` at target error rate $\alpha$, and ordinal `spread` ($\sigma$) guards `score` rubrics.
 6. **Structured Output**: Returns `value`, `probabilities`, `prediction_set`, `confidence`, `margin`, `coverage`, `entropy`, optional `expected`/`spread` (`score`), and `action` (`act` / `confirm` / `escalate`).
 
 ### 2.3 Module Walkthrough
@@ -134,8 +134,8 @@ state + typed questions ──► sanitised <state> prompt ──► first-token
 | Module | Role in the Pipeline |
 |---|---|
 | [jevlite/schemas.py](jevlite/schemas.py) | Pydantic v2 request/response contracts (`Noul`, `Choice`, `Score`, `DecideRequest`, `Answer` with `prediction_set`, `entropy`, `expected`, `spread`). |
-| [jevlite/engine.py](jevlite/engine.py) | Prompt construction with `<state>` tag-breakout sanitisation, Unicode/script-digit folding, parallel cyclic permutations, PriDe 1-pass debiasing, ordinal `Score` routing, and Split Conformal routing. |
-| [jevlite/calibration.py](jevlite/calibration.py) | MAP-regularised temperature scaling, Split Conformal Adaptive Prediction Sets (APS) + Mondrian language quantiles, PriDe prior estimation, ECE, Brier, and Ranked Probability Score (`rps`). |
+| [jevlite/engine.py](jevlite/engine.py) | Prompt construction with `<state>` tag-breakout sanitization, Unicode/script-digit folding, parallel cyclic permutations, PriDe 1-pass debiasing, ordinal `Score` routing, and Split Conformal routing. |
+| [jevlite/calibration.py](jevlite/calibration.py) | MAP-regularized temperature scaling, Split Conformal Adaptive Prediction Sets (APS) + Mondrian language quantiles, PriDe prior estimation, ECE, Brier, and Ranked Probability Score (`rps`). |
 | [jevlite/backend.py](jevlite/backend.py) | `OllamaBackend` (`num_predict=1`, `top_logprobs=20`, `logaddexp` subword merging without double-counting) and `StubBackend` for deterministic tests. |
 | [jevlite/hf_backend.py](jevlite/hf_backend.py) | Local Hugging Face `AutoModelForCausalLM` single forward pass over last-token logits (never calls `generate()`). |
 | [jevlite/encoders.py](jevlite/encoders.py) | `HashEncoder` (char n-gram test encoder) and `HFEncoder` with asymmetric query/candidate prefixes (e.g. `"query: "` vs `"passage: "` for multilingual-E5). |
@@ -203,15 +203,14 @@ Global backend flags for any subcommand (precedence: `pointer > hf > Ollama`):
 uvicorn jevlite.server:app --port 8000 --reload
 ```
 
-- `GET /` — Built-in interactive browser triage console ([jevlite — Multilingual Triage Console](http://127.0.0.1:8000/)) with multilingual presets and live `/v1/decide` cards (returns service metadata JSON when `Accept: application/json` is sent).
-- `GET /docs` — Live interactive Swagger UI (`http://127.0.0.1:8000/docs`).
+#### Interactive Multilingual Triage Console (`http://localhost:8000/`)
+
+[![jevlite — Multilingual Triage Console](docs/triage-consol.jpg)](http://localhost:8000/)
+- `GET /docs` — Live interactive Swagger UI (`http://localhost:8000/docs`).
   - **Offline / Static Swagger Artifacts**: [docs/swagger.html](docs/swagger.html) (standalone Swagger UI page with embedded spec) and [docs/openapi.json](docs/openapi.json) (OpenAPI 3.1 schema, regenerated anytime via `python -m jevlite.cli openapi`).
 - `POST /v1/decide` — Accepts a `DecideRequest` (`state`, `questions`, optional `lang`, optional `permutations`) and returns a `DecideResponse` with one `Answer` per question. Every request/response pair is appended asynchronously off the event loop to `decisions.jsonl`.
 - `GET /healthz` — Returns `{"ok": true, "model": "<backend name>"}` for liveness probes.
 
-#### Interactive Multilingual Triage Console (`http://127.0.0.1:8000/`)
-
-[![jevlite — Multilingual Triage Console](docs/triage-consol.jpg)](http://127.0.0.1:8000/)
 
 #### Interactive Swagger / OpenAPI Specification (`/docs` & `docs/swagger.html`)
 
@@ -271,7 +270,7 @@ python -m jevlite.cli --hf-model /models/my-causal-lm check
 
 - **Language-neutral answer alphabet**: The model emits `A`, `2`, or `Yes`, never a word in the input language.
 - **English instructions, original-language state**: Input text is never translated, avoiding translation latency and lost nuance.
-- **Unicode, script-digit & punctuation folding**: Candidate tokens are NFKC-normalised, stripped of punctuation (`"A."`, `"Yes,"`), case-folded, and non-Latin Unicode decimal digits (Arabic-Indic `١..٩`, Devanagari `१..९`, full-width `１..９`) map to ASCII `0..9`. Colliding subword tokens merge via `logaddexp`.
+- **Unicode, script-digit & punctuation folding**: Candidate tokens are NFKC-normalized, stripped of punctuation (`"A."`, `"Yes,"`), case-folded, and non-Latin Unicode decimal digits (Arabic-Indic `١..٩`, Devanagari `१..९`, full-width `１..９`) map to ASCII `0..9`. Colliding subword tokens merge via `logaddexp`.
 - **Prompt-injection isolation**: Raw `<state>` / `</state>` tags inside untrusted user input are escaped before prompt construction, blocking delimiter breakout.
 - **1-pass PriDe debiasing & concurrent permutations**: `eval` estimates empirical option-letter priors (**PriDe**) so `permutations: 1` cancels position bias at $1\times$ cost; when `permutations: k` ($k > 1$) is requested, evenly strided rotations execute concurrently via `asyncio.gather`.
 - **Coverage guard**: Low probability mass on valid symbols (the model tried to write prose or refuse) forces `escalate` regardless of confidence.
@@ -288,7 +287,7 @@ python -m jevlite.cli --hf-model /models/my-causal-lm check
 
 Raw LLM probabilities are overconfident, and fixed scalar thresholds behave differently on 2-way (`noul`) vs. 20-way (`choice`) questions. `eval` uses a task-stratified 50/50 split to fit **PriDe priors**, **MAP temperatures**, and **Split Conformal Prediction (APS)** quantiles in [calibration.json](calibration.json).
 
-- **MAP-regularised temperature scaling** ([jevlite/calibration.py](jevlite/calibration.py)): Divides log-probabilities by $T$ and minimises $\text{mean\_NLL}(T) + \frac{\lambda}{N}(\log T)^2$ via golden-section search. The log-normal prior prevents small or 100%-accurate splits from collapsing to $T \to 0.2$, while converging to exact MLE as $N$ grows.
+- **MAP-regularized temperature scaling** ([jevlite/calibration.py](jevlite/calibration.py)): Divides log-probabilities by $T$ and minimizes $\text{mean\_NLL}(T) + \frac{\lambda}{N}(\log T)^2$ via golden-section search. The log-normal prior prevents small or 100%-accurate splits from collapsing to $T \to 0.2$, while converging to exact MLE as $N$ grows.
 - **Split Conformal Prediction / Adaptive Prediction Sets (APS)**: Computes finite-sample quantiles $\hat{q}$ at target error rate $\alpha$ (`--alpha 0.10` $\implies \ge 90\%$ marginal coverage), plus **Mondrian per-language quantiles** (`task|lang`) when a language has $\ge 10$ calibration examples:
   - $|C(x)| = 1 \implies$ `act` (unattended execution within error budget $\alpha$).
   - $1 < |C(x)| \le \text{max\_confirm\_set\_size} \implies$ `confirm` (surfaces the narrowed `prediction_set` for 1-click human review).
@@ -347,7 +346,7 @@ Three backends share the exact same `Engine`, HTTP API, and `Calibration` layer:
 
 ### 6.2 Distilling & Training the Pointer Model
 
-A frozen multilingual bi-encoder embeds `state`, `prompt`, and each verbalised option using asymmetric prefixes (`"query: "` for state/question, auto `"passage: "` for options on E5 models). A lightweight NumPy head (`~0.7M` parameters at `d=768`, trains on CPU) scores each option directly—no letter labels, zero position bias, and `coverage = 1.0`.
+A frozen multilingual bi-encoder embeds `state`, `prompt`, and each verbalized option using asymmetric prefixes (`"query: "` for state/question, auto `"passage: "` for options on E5 models). A lightweight NumPy head (`~0.7M` parameters at `d=768`, trains on CPU) scores each option directly—no letter labels, zero position bias, and `coverage = 1.0`.
 
 ```bash
 pip install numpy torch transformers      # torch/transformers only needed for HFEncoder
@@ -372,7 +371,7 @@ Recommended encoders:
 
 ### 6.3 Continuous Improvement Flywheel
 
-1. **Verbalised options**: `noul` and `score` candidates include `q.prompt` (`"{prompt} — yes"` / `"{prompt} — no"`) so opposite binary questions never collapse onto a static vector.
+1. **Verbalized options**: `noul` and `score` candidates include `q.prompt` (`"{prompt} — yes"` / `"{prompt} — no"`) so opposite binary questions never collapse onto a static vector.
 2. **Uncertainty-preserving distillation**: Soft teacher distributions are weighted by `teacher_cov` and are never double-smoothed; hard `score` labels use unimodal Laplace smoothing.
 3. **Active learning**: Sample high-`entropy` escalations from `decisions.jsonl` for human review, append corrections as hard labels, retrain the pointer head, and keep the LLM as the System-2 fallback for `escalate`.
 
@@ -391,7 +390,7 @@ All **32 unit tests** in [tests/test_jevlite.py](tests/test_jevlite.py) and [tes
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -v
 ```
 
-Covered behaviours include MAP temperature regularisation, Unicode/script-digit folding, `<state>` injection sanitisation, `logaddexp` subword merging, PriDe 1-pass debiasing, Split Conformal APS + Mondrian routing, ordinal `Score` spread & RPS, analytic vs. finite-difference pointer gradients, soft-target preservation, unimodal ordinal smoothing, OpenAPI/Swagger static dereferencing, and opposite-question disambiguation.
+Covered behaviors include MAP temperature regularization, Unicode/script-digit folding, `<state>` injection sanitization, `logaddexp` subword merging, PriDe 1-pass debiasing, Split Conformal APS + Mondrian routing, ordinal `Score` spread & RPS, analytic vs. finite-difference pointer gradients, soft-target preservation, unimodal ordinal smoothing, OpenAPI/Swagger static dereferencing, and opposite-question disambiguation.
 
 ### 7.2 Known Limits
 
@@ -408,7 +407,7 @@ Each foundational reference below links to the publication and to the exact modu
   - **Where used in code**: Typed non-generative question primitives (`Noul`, `Choice`, `Score`) and three-tier `action` contract (`act` / `confirm` / `escalate`) in [jevlite/schemas.py](jevlite/schemas.py#L19-L69); single-step next-token distribution readout and `coverage` escalation guard in [jevlite/engine.py](jevlite/engine.py#L179-L268); single forward-pass logit readout in [jevlite/hf_backend.py](jevlite/hf_backend.py#L28-L45); and vocabulary-free option scoring in [jevlite/pointer.py](jevlite/pointer.py#L51-L75).
 - **Guo, C., Pleiss, G., Sun, Y., & Weinberger, K. Q. (2017).** [*On Calibration of Modern Neural Networks*](https://arxiv.org/abs/1706.04599) ([ICML / PMLR](https://proceedings.mlr.press/v70/guo17a.html)).
   - **Concept**: Post-hoc temperature scaling ($z / T$) to align predicted confidence with empirical accuracy without altering `argmax` predictions, extended here with a MAP log-normal prior $\frac{\lambda}{N}(\log T)^2$ to prevent $T \to 0$ collapse on small splits.
-  - **Where used in code**: `apply_temperature` ([jevlite/calibration.py](jevlite/calibration.py#L34-L39)), MAP-regularised `fit_temperature` ([jevlite/calibration.py](jevlite/calibration.py#L42-L87)), task/type lookup `Calibration.temperature` ([jevlite/calibration.py](jevlite/calibration.py#L266-L269)), offline fitting in `fit` ([jevlite/evaluate.py](jevlite/evaluate.py#L140-L145)), and live inference rescaling in `Engine._answer` ([jevlite/engine.py](jevlite/engine.py#L273-L274)).
+  - **Where used in code**: `apply_temperature` ([jevlite/calibration.py](jevlite/calibration.py#L34-L39)), MAP-regularized `fit_temperature` ([jevlite/calibration.py](jevlite/calibration.py#L42-L87)), task/type lookup `Calibration.temperature` ([jevlite/calibration.py](jevlite/calibration.py#L266-L269)), offline fitting in `fit` ([jevlite/evaluate.py](jevlite/evaluate.py#L140-L145)), and live inference rescaling in `Engine._answer` ([jevlite/engine.py](jevlite/engine.py#L273-L274)).
 - **Romano, Y., Sesia, M., & Candès, E. J. (2020).** [*Classification with Valid and Adaptive Coverage*](https://arxiv.org/abs/2006.02544) ([NeurIPS Proceedings](https://proceedings.neurips.cc/paper/2020/hash/244edd7e85dc81602b7615cd705545f5-Abstract.html)).
   - **Concept**: Adaptive Prediction Sets (APS) that accumulate sorted class probabilities up to a calibrated threshold so prediction set size adapts to per-input difficulty across any number of options $K$.
   - **Where used in code**: Nonconformity scoring `aps_nonconformity` ([jevlite/calibration.py](jevlite/calibration.py#L121-L130)), set builder `prediction_set_indices` ([jevlite/calibration.py](jevlite/calibration.py#L144-L157)), `Answer.prediction_set` ([jevlite/schemas.py](jevlite/schemas.py#L64)), and singleton (`act`) vs. compact subset (`confirm`) routing in `Engine._route` ([jevlite/engine.py](jevlite/engine.py#L256-L263)).
