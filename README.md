@@ -28,9 +28,10 @@ Ask multilingual questions to `jevlite` and get calibrated prediction sets out w
   - [5.1 How Calibration & Conformal Routing Work](#51-how-calibration--conformal-routing-work)
   - [5.2 Reading an Evaluation Run](#52-reading-an-evaluation-run)
 - [6: Going Non-Generative (Distillation & Pointer Student)](#6-going-non-generative-distillation--pointer-student)
-  - [6.1 Backend Comparison](#61-backend-comparison)
-  - [6.2 Distilling & Training the Pointer Model](#62-distilling--training-the-pointer-model)
-  - [6.3 Continuous Improvement Flywheel](#63-continuous-improvement-flywheel)
+  - [6.1 Backend Comparison & Which Encoder Is Used](#61-backend-comparison--which-encoder-is-used)
+  - [6.2 How Ollama (Teacher) vs. HFEncoder + Pointer (Student) Work](#62-how-ollama-teacher-vs-hfencoder--pointer-student-work)
+  - [6.3 Distilling & Training the Pointer Model](#63-distilling--training-the-pointer-model)
+  - [6.4 Continuous Improvement Flywheel](#64-continuous-improvement-flywheel)
 - [7: Testing, Limits & Research References](#7-testing-limits--research-references)
   - [7.1 Test Suite Status](#71-test-suite-status)
   - [7.2 Known Limits](#72-known-limits)
@@ -334,19 +335,62 @@ How to interpret key metrics:
 <details>
 <summary><h2 id="6-going-non-generative-distillation--pointer-student" style="display:inline">6: Going Non-Generative (Distillation &amp; Pointer Student)</h2></summary>
 
-### 6.1 Backend Comparison
 
-Three backends share the exact same `Engine`, HTTP API, and `Calibration` layer:
+`jevlite` operates in **two distinct runtime modes** (Teacher vs. Student) that share the exact same `Engine`, HTTP API, and `Calibration` layer—it does **not** run Ollama and `HFEncoder` simultaneously on the same live request:
 
-| Backend | How It Scores Answers | Generates Tokens? |
-|---|---|---|
-| **Ollama** (default) | `num_predict=1`, reads `top_logprobs=20` | Samples 1 token |
-| **HF Causal LM** (`--hf-model` / `JEV_HF_MODEL`) | Single forward pass, reads last-position logits | No |
-| **Pointer Student** (`--pointer` / `JEV_POINTER`) | Frozen bi-encoder + trained NumPy head scores option texts | No (has no vocabulary) |
+| Backend | How It Scores Answers | Encoder Used | Generates Tokens? |
+|---|---|---|---|
+| **Ollama** (default Teacher) | `num_predict=1`, reads `top_logprobs=20` (`gemma3:12b`) | *None* (uses LLM's own tokenizer & weights) | Samples 1 token |
+| **HF Causal LM** (`--hf-model` / `JEV_HF_MODEL`) | Single forward pass, reads last-position logits | *None* (causal LM forward pass) | No |
+| **Pointer Student** (`--pointer` / `JEV_POINTER`) | Frozen bi-encoder + trained NumPy head scores option texts | `HFEncoder` (prod) or `HashEncoder` (tests) | No (has no vocabulary) |
 
-### 6.2 Distilling & Training the Pointer Model
+- **Live default (`cli check`, `cli eval`, Uvicorn without `JEV_POINTER`)**: Runs directly on **Ollama (`gemma3:12b`)** via [jevlite/backend.py](jevlite/backend.py); no `HFEncoder` is invoked.
+- **Offline unit tests ([tests/test_pointer.py](tests/test_pointer.py))**: Uses **`HashEncoder`** ([jevlite/encoders.py](jevlite/encoders.py))—a deterministic character/word n-gram hashing encoder (`--encoder hash`) that verifies pointer training without downloading model weights.
+- **Production Pointer Student**: Uses **`HFEncoder`** ([jevlite/encoders.py](jevlite/encoders.py)) with **`intfloat/multilingual-e5-base`** (`--prefix "query: "`, which automatically sets `"passage: "` on candidate options) or **`BAAI/bge-m3`** (`--pooling cls`).
 
-A frozen multilingual bi-encoder embeds `state`, `prompt`, and each verbalized option using asymmetric prefixes (`"query: "` for state/question, auto `"passage: "` for options on E5 models). A lightweight NumPy head (`~0.7M` parameters at `d=768`, trains on CPU) scores each option directly—no letter labels, zero position bias, and `coverage = 1.0`.
+### 6.2 How Ollama (Teacher) vs. HFEncoder + Pointer (Student) Work
+
+- **Mode A — Ollama Teacher Mode** ([jevlite/backend.py](jevlite/backend.py), [jevlite/engine.py](jevlite/engine.py)):
+  1. Wraps the raw multilingual message in `<state>...</state>` with an English prompt asking for a single symbol (`Yes/No`, `A..Z`, or `1..N`).
+  2. Requests `num_predict=1`, `temperature=0`, and `top_logprobs=20` from Ollama `/api/chat`—inspecting the next-token probability table without letting the LLM write prose.
+  3. Folds Unicode/script-digit variants via `logaddexp`, checks `coverage`, removes position bias via **PriDe**, and applies MAP temperature + Split Conformal routing.
+
+- **Mode B — `HFEncoder` + Pointer Student Mode** ([jevlite/encoders.py](jevlite/encoders.py), [jevlite/pointer.py](jevlite/pointer.py)):
+  Ollama labels unlabeled traffic offline (`soft.jsonl`), and a compact CPU student (`~0.7M` parameters) replaces the LLM at runtime for 10–50$\times$ faster inference:
+
+```mermaid
+flowchart LR
+    subgraph Phase1["1. Offline Teacher Distillation"]
+        RAW["Unlabeled / Logged Texts"]:::entry --> OLL["Ollama (gemma3:12b)<br/>Teacher Engine"]:::backend
+        OLL -->|"Calibrated Soft Probs"| SOFT[("soft.jsonl")]:::flywheel
+    end
+
+    subgraph Phase2["2. Offline Student Training"]
+        SOFT --> HFE1["HFEncoder (Frozen)<br/>multilingual-e5-base"]:::student
+        HFE1 -->|"768-d Vectors"| FIT["Train PointerHead (NumPy)<br/>~0.7M params on CPU"]:::engine
+        FIT --> NPZ[("pointer_head.npz")]:::calib
+    end
+
+    subgraph Phase3["3. Live Runtime (JEV_POINTER)"]
+        REQ["Multilingual Request"]:::entry --> HFE2["HFEncoder<br/>query: state &amp; prompt<br/>passage: options"]:::student
+        NPZ -.-> HEAD["PointerScorer<br/>Scaled Dot-Product Logits"]:::engine
+        HFE2 --> HEAD --> OUT["Calibrated Answer<br/>(Zero Ollama Calls)"]:::action
+    end
+
+    classDef entry fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
+    classDef engine fill:#E0E7FF,stroke:#4F46E5,stroke-width:2px,color:#1E1B4B
+    classDef backend fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+    classDef student fill:#FCE7F3,stroke:#DB2777,stroke-width:2px,color:#831843
+    classDef calib fill:#F3E8FF,stroke:#9333EA,stroke-width:2px,color:#4C1D95
+    classDef action fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef flywheel fill:#CCFBF1,stroke:#0D9488,stroke-width:2px,color:#134E4A
+```
+
+  1. **`HFEncoder` embeds text**: Encodes `state` and `question.prompt` with `"query: "` ($h_{\text{state}}, h_{\text{question}} \in \mathbb{R}^{768}$) and verbalized candidate options with `"passage: "` ($h_{\text{opt}_j} \in \mathbb{R}^{768}$).
+  2. **`PointerHead` scores options directly**: Builds $\text{ctx} = [h_{\text{state}}, h_{\text{question}}, h_{\text{state}} \odot h_{\text{question}}]$, projects it through a 2-layer `tanh` head into query $q$, and scores each option via scaled dot-product $q \cdot (W_k h_{\text{opt}_j})$.
+  3. **Shared `Engine` finish**: `Engine` calls `score_options`, sets `coverage = 1.0`, applies `calibration.json`, and returns the identical `DecideResponse` schema.
+
+### 6.3 Distilling & Training the Pointer Model
 
 ```bash
 pip install numpy torch transformers      # torch/transformers only needed for HFEncoder
@@ -369,6 +413,7 @@ Recommended encoders:
 - `xlm-roberta-base`
 - `hash` (dependency-free char n-gram encoder for unit tests and pipeline demos only)
 
+### 6.4
 ### 6.3 Continuous Improvement Flywheel
 
 1. **Verbalized options**: `noul` and `score` candidates include `q.prompt` (`"{prompt} — yes"` / `"{prompt} — no"`) so opposite binary questions never collapse onto a static vector.
